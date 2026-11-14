@@ -1,0 +1,11 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    // TypeScript 6 no longer loads every @types package implicitly. Jest globals are used by the
+    // tests, Node types by src/test-utils and e2e (src/core itself only relies on DOM/ES globals).
+    "types": ["jest", "node"]
+  }
+}
