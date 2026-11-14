@@ -1,0 +1,7 @@
+# Legacy repositories, kept as reference and versioned separately (github.com/monkjuice/Fixes, /xamFixes).
+/Fixes/
+/xamFixes/
+
+# OS clutter
+.DS_Store
+Thumbs.db
