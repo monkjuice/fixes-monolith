@@ -1,0 +1,19 @@
+# TLS reverse proxy for the "tls" compose profile. Caddy obtains certificates automatically
+# for FIXES_DOMAIN (its DNS must point here and ports 80/443 must be reachable).
+{$FIXES_DOMAIN} {
+	encode zstd gzip
+
+	# Defence in depth; the API enforces the exact per-route limits itself (§5.7).
+	request_body {
+		max_size 10MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# Plain proxying also carries WebSocket upgrades (/v1/ws).
+	reverse_proxy api:8000
+}

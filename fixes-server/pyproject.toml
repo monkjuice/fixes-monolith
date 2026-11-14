@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fixes-server"
+version = "2.0.0"
+description = "Fixes v2 API: accounts, friendships, device directory and an E2EE envelope relay."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = [
+    "fastapi==0.162.6",
+    "uvicorn[standard]==0.54.0",
+    "pydantic==2.14.3",
+    "pydantic-settings==2.16.3",
+    "pymongo==4.20.0",
+    "argon2-cffi==25.1.0",
+    "PyJWT==2.15.1",
+    "cryptography==50.0.2",
+    "pillow==13.0.0",
+    "python-multipart==0.0.33",
+    "boto3==1.44.2",
+    "anyio==4.16.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.2.0",
+    "httpx==0.28.1",
+    "ruff==0.17.5",
+    "mypy==2.4.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fixes_server = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "BLE", "RUF", "SIM", "PT", "N"]
+ignore = [
+    # FastAPI's dependency-injection idiom puts Depends()/Query() in defaults.
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use assert and hard-coded throwaway values by design.
+"tests/**" = ["S101", "S105", "S106", "S311"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.File"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+# boto3/botocore ship without type information; stubs would be an extra dependency.
+module = ["boto3", "boto3.*", "botocore", "botocore.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+filterwarnings = [
+    "error",
+    # Starlette 1.x prefers httpx2 for its TestClient; httpx is the pinned test client here.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
+]

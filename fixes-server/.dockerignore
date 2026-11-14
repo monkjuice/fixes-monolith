@@ -1,0 +1,13 @@
+# Build context: only pyproject.toml, README.md and src/ are needed.
+.venv/
+.git/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+*.egg-info/
+tests/
+data/
+# Environment files may hold secrets; they are passed at runtime, never baked into the image.
+# (The pattern also matches a bare dotfile of that name.)
+*.env

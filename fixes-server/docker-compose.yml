@@ -1,0 +1,153 @@
+# Fixes server stack. Values come from the environment or an --env-file (see example.env):
+#   docker compose --env-file fixes.env up -d --build              # API + MongoDB
+#   docker compose --env-file fixes.env --profile tls up -d        # + Caddy (HTTPS)
+#   docker compose --env-file fixes.env --profile s3 up -d         # + MinIO (S3 avatars)
+name: fixes
+
+services:
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    # Only the API can reach MongoDB (which runs without authentication): the backend network
+    # is internal and no internet-facing container (Caddy, MinIO) joins it.
+    networks: [backend]
+
+  api:
+    build: .
+    image: fixes-server:local
+    restart: unless-stopped
+    # Unprivileged (uid 10001, see Dockerfile) with a read-only root filesystem. Writable:
+    # the avatar volume, and /tmp, where Starlette spools multipart uploads over 1 MiB.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      FIXES_JWT_SECRET: ${FIXES_JWT_SECRET:?set FIXES_JWT_SECRET (at least 32 random characters)}
+      FIXES_PUBLIC_BASE_URL: ${FIXES_PUBLIC_BASE_URL:?set FIXES_PUBLIC_BASE_URL}
+      FIXES_MONGODB_URI: ${FIXES_MONGODB_URI:-mongodb://mongo:27017}
+      FIXES_MONGODB_DB: ${FIXES_MONGODB_DB:-fixes}
+      FIXES_LOG_LEVEL: ${FIXES_LOG_LEVEL:-}
+      FIXES_STORAGE_BACKEND: ${FIXES_STORAGE_BACKEND:-local}
+      FIXES_STORAGE_LOCAL_DIR: /data/media
+      FIXES_S3_BUCKET: ${FIXES_S3_BUCKET:-}
+      FIXES_S3_ENDPOINT_URL: ${FIXES_S3_ENDPOINT_URL:-}
+      FIXES_S3_REGION: ${FIXES_S3_REGION:-}
+      FIXES_S3_PUBLIC_BASE_URL: ${FIXES_S3_PUBLIC_BASE_URL:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      FIXES_ENVELOPE_TTL_DAYS: ${FIXES_ENVELOPE_TTL_DAYS:-}
+      FIXES_DEVICE_IDLE_DAYS: ${FIXES_DEVICE_IDLE_DAYS:-}
+      FIXES_CORS_ORIGINS: ${FIXES_CORS_ORIGINS:-}
+      FIXES_RATE_LIMIT_REGISTER: ${FIXES_RATE_LIMIT_REGISTER:-}
+      FIXES_RATE_LIMIT_LOGIN_FAILURES_USER_IP: ${FIXES_RATE_LIMIT_LOGIN_FAILURES_USER_IP:-}
+      FIXES_RATE_LIMIT_LOGIN_FAILURES_IP: ${FIXES_RATE_LIMIT_LOGIN_FAILURES_IP:-}
+      FIXES_RATE_LIMIT_LOGIN_SUCCESS: ${FIXES_RATE_LIMIT_LOGIN_SUCCESS:-}
+      FIXES_RATE_LIMIT_REFRESH: ${FIXES_RATE_LIMIT_REFRESH:-}
+      FIXES_RATE_LIMIT_ENVELOPES: ${FIXES_RATE_LIMIT_ENVELOPES:-}
+      FIXES_RATE_LIMIT_USER_LOOKUP: ${FIXES_RATE_LIMIT_USER_LOOKUP:-}
+      FIXES_RATE_LIMIT_FRIEND_REQUESTS: ${FIXES_RATE_LIMIT_FRIEND_REQUESTS:-}
+      FIXES_RATE_LIMIT_AVATAR: ${FIXES_RATE_LIMIT_AVATAR:-}
+      FIXES_RATE_LIMIT_WS_CONNECT: ${FIXES_RATE_LIMIT_WS_CONNECT:-}
+      FIXES_WS_MAX_UNAUTHENTICATED_PER_IP: ${FIXES_WS_MAX_UNAUTHENTICATED_PER_IP:-}
+      FIXES_WS_AUTH_TIMEOUT_SECONDS: ${FIXES_WS_AUTH_TIMEOUT_SECONDS:-}
+      # Only the Caddy container (fixed address below) may set the client IP via X-Forwarded-For.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.30.0.10}
+    volumes:
+      - media:/data/media
+    ports:
+      # Loopback by default; set FIXES_API_PUBLISH=0.0.0.0:8000 to reach it from a phone on the LAN.
+      - "${FIXES_API_PUBLISH:-127.0.0.1:8000}:8000"
+    networks: [fixes, backend]
+
+  caddy:
+    image: caddy:2.11.9
+    profiles: [tls]
+    restart: unless-stopped
+    depends_on: [api]
+    environment:
+      FIXES_DOMAIN: ${FIXES_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      fixes:
+        ipv4_address: 172.30.0.10
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    profiles: [s3]
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    volumes:
+      - minio-data:/data
+    ports:
+      # Avatars are fetched by phones from FIXES_S3_PUBLIC_BASE_URL, so the S3 port is published.
+      - "${FIXES_MINIO_PUBLISH:-127.0.0.1:9000}:9000"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [fixes]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: [s3]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+      FIXES_S3_BUCKET: ${FIXES_S3_BUCKET:-}
+    # Creates the bucket and lets anyone read objects under avatars/ by URL, nothing else.
+    # Not mc's canned "download" policy: on a prefix it also allows anonymous listing, which
+    # would let anyone enumerate every avatar. set-json replaces any earlier bucket policy.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing "local/$$FIXES_S3_BUCKET" &&
+        printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/avatars/*"]}]}' "$$FIXES_S3_BUCKET" > /tmp/avatars-policy.json &&
+        mc anonymous set-json /tmp/avatars-policy.json "local/$$FIXES_S3_BUCKET"
+    networks: [fixes]
+
+networks:
+  backend:
+    internal: true
+  fixes:
+    ipam:
+      config:
+        # Dynamic addresses come from .128/25, so the Caddy address .10 can never be taken
+        # by another container (which would then be trusted for X-Forwarded-For).
+        - subnet: 172.30.0.0/24
+          ip_range: 172.30.0.128/25
+
+volumes:
+  mongo-data:
+  media:
+  minio-data:
+  caddy-data:
+  caddy-config:

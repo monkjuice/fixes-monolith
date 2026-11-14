@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+# Local avatar storage.
+data/
+# Real configuration files hold secrets (the pattern also matches a bare dotfile of that
+# name); only the placeholder example is versioned.
+*.env
+!example.env
